@@ -1,0 +1,18 @@
+table,step,rows_affected
+agents,drop duplicate agent_id,0
+agents,"standardise column names, numeric types, lower-case emails",50
+listings,drop duplicate listing_id,0
+listings,"round price / area to 2 dp, coordinates to 6 dp; dates to YYYY-MM-DD",21200
+listings,drop rows missing id / city / type / price / date,0
+listings,set agent_id NULL where the agent does not exist,0
+property_attributes,drop duplicate listing_id,0
+property_attributes,booleans -> 0/1 integers,21200
+property_attributes,swap floor_number / total_floors where floor > total floors,255
+property_attributes,drop rows whose listing_id is not in listings,0
+sales,drop duplicate listing_id,0
+sales,drop rows whose listing_id is not in listings,0
+sales,days_on_market: noisy float -> whole days from the two dates (max difference 0.030 days),720
+sales,"add surrogate key sale_id (1..n, ordered by listing_id)",720
+buyers,drop duplicate buyer_id,0
+buyers,map raw sale_id (a listing id) -> sales.sale_id; drop unmatched,0
+buyers,loan_taken -> 0/1; provider NULL and amount 0 when no loan,9966

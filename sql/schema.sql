@@ -1,0 +1,159 @@
+-- BrickView schema (SQLite). Five normalised tables, foreign keys, CHECK constraints,
+-- indexes on every join / filter column, and reporting views.
+-- Run with PRAGMA foreign_keys = ON (src/db.py does this on every connection).
+
+DROP VIEW IF EXISTS v_listing_details;
+DROP VIEW IF EXISTS v_sale_details;
+DROP VIEW IF EXISTS v_buyer_details;
+DROP VIEW IF EXISTS v_agent_performance;
+DROP VIEW IF EXISTS v_city_summary;
+DROP VIEW IF EXISTS v_active_listings;
+DROP TABLE IF EXISTS buyers;
+DROP TABLE IF EXISTS sales;
+DROP TABLE IF EXISTS property_attributes;
+DROP TABLE IF EXISTS listings;
+DROP TABLE IF EXISTS agents;
+
+-- ------------------------------------------------------------------ tables
+CREATE TABLE agents (
+    agent_id          TEXT    PRIMARY KEY,
+    name              TEXT    NOT NULL,
+    phone             TEXT,
+    email             TEXT    UNIQUE,
+    commission_rate   REAL    CHECK (commission_rate BETWEEN 0 AND 100),   -- percent
+    deals_closed      INTEGER CHECK (deals_closed >= 0),                   -- lifetime figure from the agent file
+    rating            REAL    CHECK (rating BETWEEN 0 AND 5),
+    experience_years  INTEGER CHECK (experience_years >= 0),
+    avg_closing_days  INTEGER CHECK (avg_closing_days >= 0)
+);
+
+CREATE TABLE listings (
+    listing_id     TEXT    PRIMARY KEY,
+    city           TEXT    NOT NULL,
+    property_type  TEXT    NOT NULL,
+    price          REAL    NOT NULL CHECK (price > 0),
+    area_sqft      REAL    CHECK (area_sqft > 0),
+    date_listed    TEXT    NOT NULL CHECK (date_listed = date(date_listed)),   -- YYYY-MM-DD
+    agent_id       TEXT    REFERENCES agents (agent_id) ON UPDATE CASCADE ON DELETE SET NULL,
+    latitude       REAL    CHECK (latitude BETWEEN -90 AND 90),
+    longitude      REAL    CHECK (longitude BETWEEN -180 AND 180)
+);
+
+-- One-to-one with listings (UNIQUE listing_id).
+CREATE TABLE property_attributes (
+    attribute_id       INTEGER PRIMARY KEY,
+    listing_id         TEXT    NOT NULL UNIQUE
+                               REFERENCES listings (listing_id) ON UPDATE CASCADE ON DELETE CASCADE,
+    bedrooms           INTEGER CHECK (bedrooms >= 0),
+    bathrooms          INTEGER CHECK (bathrooms >= 0),
+    floor_number       INTEGER CHECK (floor_number >= 0),
+    total_floors       INTEGER CHECK (total_floors >= 0),
+    year_built         INTEGER CHECK (year_built BETWEEN 1800 AND 2100),
+    is_rented          INTEGER NOT NULL DEFAULT 0 CHECK (is_rented IN (0, 1)),
+    tenant_count       INTEGER NOT NULL DEFAULT 0 CHECK (tenant_count >= 0),
+    furnishing_status  TEXT    CHECK (furnishing_status IN ('Furnished', 'Semi-Furnished', 'Unfurnished')),
+    metro_distance_km  REAL    CHECK (metro_distance_km >= 0),
+    parking_available  INTEGER NOT NULL DEFAULT 0 CHECK (parking_available IN (0, 1)),
+    power_backup       INTEGER NOT NULL DEFAULT 0 CHECK (power_backup IN (0, 1))
+);
+
+-- A listing can be sold at most once (UNIQUE listing_id).
+CREATE TABLE sales (
+    sale_id         INTEGER PRIMARY KEY,
+    listing_id      TEXT    NOT NULL UNIQUE
+                            REFERENCES listings (listing_id) ON UPDATE CASCADE ON DELETE CASCADE,
+    sale_price      REAL    NOT NULL CHECK (sale_price > 0),
+    date_sold       TEXT    NOT NULL CHECK (date_sold = date(date_sold)),
+    days_on_market  INTEGER CHECK (days_on_market >= 0)
+);
+
+CREATE TABLE buyers (
+    buyer_id       INTEGER PRIMARY KEY,
+    sale_id        INTEGER NOT NULL REFERENCES sales (sale_id) ON UPDATE CASCADE ON DELETE CASCADE,
+    buyer_type     TEXT    CHECK (buyer_type IN ('Investor', 'End User')),
+    payment_mode   TEXT    CHECK (payment_mode IN ('Cash', 'UPI', 'Bank Transfer', 'Cheque')),
+    loan_taken     INTEGER NOT NULL DEFAULT 0 CHECK (loan_taken IN (0, 1)),
+    loan_provider  TEXT,
+    loan_amount    REAL    NOT NULL DEFAULT 0 CHECK (loan_amount >= 0),
+    CHECK (loan_taken = 1 OR (loan_amount = 0 AND loan_provider IS NULL))
+);
+
+-- ------------------------------------------------------------------ indexes
+CREATE INDEX idx_listings_city          ON listings (city);
+CREATE INDEX idx_listings_type          ON listings (property_type);
+CREATE INDEX idx_listings_agent         ON listings (agent_id);
+CREATE INDEX idx_listings_price         ON listings (price);
+CREATE INDEX idx_listings_date          ON listings (date_listed);
+CREATE INDEX idx_listings_city_type     ON listings (city, property_type);
+CREATE INDEX idx_attr_furnishing        ON property_attributes (furnishing_status);
+CREATE INDEX idx_sales_date             ON sales (date_sold);
+CREATE INDEX idx_buyers_sale            ON buyers (sale_id);
+CREATE INDEX idx_buyers_type            ON buyers (buyer_type);
+
+-- ------------------------------------------------------------------ views
+-- Every listing with its attributes, agent and sale status (the dashboard's main source).
+CREATE VIEW v_listing_details AS
+SELECT l.listing_id, l.city, l.property_type, l.price, l.area_sqft,
+       ROUND(l.price / NULLIF(l.area_sqft, 0), 2)            AS price_per_sqft,
+       l.date_listed, l.agent_id, a.name AS agent_name, l.latitude, l.longitude,
+       pa.bedrooms, pa.bathrooms, pa.floor_number, pa.total_floors, pa.year_built,
+       pa.is_rented, pa.tenant_count, pa.furnishing_status, pa.metro_distance_km,
+       pa.parking_available, pa.power_backup,
+       s.sale_id, s.sale_price, s.date_sold, s.days_on_market,
+       CASE WHEN s.sale_id IS NULL THEN 'Active' ELSE 'Sold' END AS status
+FROM listings l
+LEFT JOIN property_attributes pa ON pa.listing_id = l.listing_id
+LEFT JOIN agents a               ON a.agent_id    = l.agent_id
+LEFT JOIN sales s                ON s.listing_id  = l.listing_id;
+
+-- Listings that have not been sold.
+CREATE VIEW v_active_listings AS
+SELECT l.*
+FROM listings l
+WHERE NOT EXISTS (SELECT 1 FROM sales s WHERE s.listing_id = l.listing_id);
+
+-- Every sale with the listing it closed and the agent who handled it.
+CREATE VIEW v_sale_details AS
+SELECT s.sale_id, s.listing_id, l.city, l.property_type, l.price AS list_price, s.sale_price,
+       ROUND(s.sale_price / l.price, 4) AS sale_to_list_ratio,
+       l.date_listed, s.date_sold, s.days_on_market, l.agent_id, a.name AS agent_name,
+       a.commission_rate, ROUND(s.sale_price * a.commission_rate / 100.0, 2) AS commission
+FROM sales s
+JOIN listings l    ON l.listing_id = s.listing_id
+LEFT JOIN agents a ON a.agent_id   = l.agent_id;
+
+-- Buyer records joined to their sale and city.
+CREATE VIEW v_buyer_details AS
+SELECT b.*, s.listing_id, l.city, l.property_type, s.sale_price, s.days_on_market
+FROM buyers b
+JOIN sales s    ON s.sale_id    = b.sale_id
+JOIN listings l ON l.listing_id = s.listing_id;
+
+-- One row per agent: profile plus what the agent actually listed and sold in this dataset.
+CREATE VIEW v_agent_performance AS
+SELECT a.agent_id, a.name, a.rating, a.experience_years, a.commission_rate,
+       a.deals_closed       AS deals_closed_lifetime,
+       a.avg_closing_days,
+       COUNT(l.listing_id)                                    AS listings,
+       COUNT(s.sale_id)                                       AS sales,
+       COUNT(l.listing_id) - COUNT(s.sale_id)                 AS active_listings,
+       ROUND(COALESCE(SUM(s.sale_price), 0), 2)               AS sales_revenue,
+       ROUND(AVG(s.days_on_market), 1)                        AS avg_days_on_market,
+       ROUND(COALESCE(SUM(s.sale_price * a.commission_rate / 100.0), 0), 2) AS commission_earned
+FROM agents a
+LEFT JOIN listings l ON l.agent_id   = a.agent_id
+LEFT JOIN sales s    ON s.listing_id = l.listing_id
+GROUP BY a.agent_id;
+
+-- One row per city.
+CREATE VIEW v_city_summary AS
+SELECT l.city,
+       COUNT(*)                                   AS listings,
+       COUNT(s.sale_id)                           AS sales,
+       ROUND(AVG(l.price), 2)                     AS avg_list_price,
+       ROUND(AVG(l.price / l.area_sqft), 2)       AS avg_price_per_sqft,
+       ROUND(AVG(s.days_on_market), 1)            AS avg_days_on_market,
+       ROUND(AVG(s.sale_price / l.price), 4)      AS avg_sale_to_list
+FROM listings l
+LEFT JOIN sales s ON s.listing_id = l.listing_id
+GROUP BY l.city;

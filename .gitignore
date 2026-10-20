@@ -1,5 +1,9 @@
 venv/
+.venv/
 __pycache__/
-.DS_Store
 *.pyc
+.DS_Store
 .ipynb_checkpoints/
+.pytest_cache/
+reports/_build/
+.claude/

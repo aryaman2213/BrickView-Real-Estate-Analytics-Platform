@@ -1,0 +1,15 @@
+[theme]
+base = "light"
+primaryColor = "#b4532a"
+backgroundColor = "#faf8f6"
+secondaryBackgroundColor = "#f3ede8"
+textColor = "#1f2937"
+baseRadius = "0.6rem"
+borderColor = "#e9e1da"
+showWidgetBorder = true
+
+[server]
+headless = true
+
+[client]
+toolbarMode = "viewer"
