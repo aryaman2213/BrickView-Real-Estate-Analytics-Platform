@@ -43,14 +43,14 @@ def overview():
                     (SELECT COUNT(*) FROM buyers) buyers""").iloc[0]
     c = st.columns(4)
     c[0].metric("Total listings", ui.number(k.listings))
-    c[1].metric("Active (unsold)", f"{ui.number(k.active)} ({k.active / k.listings:.1%})")
+    c[1].metric(f"Active / unsold ({k.active / k.listings:.1%})", ui.number(k.active))
     c[2].metric("Properties sold", ui.number(k.sales))
     c[3].metric("Sales revenue", ui.money(k.revenue))
     c = st.columns(4)
     c[0].metric("Average list price", ui.money(k.avg_price))
-    c[1].metric("Average days on market", ui.number(k.dom, 1))
-    c[2].metric("Average sale-to-list ratio", f"{k.ratio:.4f}")
-    c[3].metric("Agents · buyer records", f"{int(k.agents)} · {int(k.buyers):,}")
+    c[1].metric("Avg days on market", ui.number(k.dom, 1))
+    c[2].metric("Sale-to-list ratio", f"{k.ratio:.4f}")
+    c[3].metric(f"Buyer records ({int(k.agents)} agents)", f"{int(k.buyers):,}")
 
     st.subheader("Key findings")
     left, right = st.columns([3, 2])
